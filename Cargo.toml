@@ -1,0 +1,13 @@
+[package]
+name = "rewatch"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+notify = "7"
+process-wrap = { version = "9", features = ["std"] }
+clap = { version = "4", features = ["derive"] }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+ctrlc = "3"
+shlex = "1"

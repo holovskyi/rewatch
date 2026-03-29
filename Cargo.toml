@@ -2,11 +2,11 @@
 name = "rewatch"
 version = "0.1.0"
 edition = "2024"
-description = "Cross-platform file watcher that restarts commands on changes"
+description = "Cross-platform file watcher that restarts commands on changes. Works great with AI coding agents (Claude Code, Cursor, Copilot) via trigger file for automated restart loops."
 license = "MIT"
 repository = "https://github.com/holovskyi/rewatch"
 readme = "README.md"
-keywords = ["watch", "file-watcher", "restart", "dev-tools"]
+keywords = ["watch", "restart", "dev-tools", "ai-agent", "claude-code"]
 categories = ["development-tools", "command-line-utilities"]
 
 [profile.release]

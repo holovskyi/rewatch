@@ -1,11 +1,13 @@
 # rewatch
 
-Cross-platform file watcher that restarts commands on changes. Event-driven (no polling), kills entire process tree, waits for your confirmation before restarting.
+Cross-platform file watcher that restarts commands on changes. Designed for development workflows with AI coding agents (Claude Code, Cursor, Copilot, etc.) and manual editing alike.
+
+Event-driven (no polling), kills entire process tree, waits for your confirmation before restarting. Supports a trigger file for fully automated restart loops with AI agents.
 
 ## Install
 
 ```bash
-cargo install --path .
+cargo install rewatch
 ```
 
 ## Usage
@@ -41,9 +43,43 @@ CLI arguments override config file values.
 
 1. Starts your command
 2. Watches specified files/directories for changes
-3. On change — kills the process (entire tree) and shows what changed
+3. On change — kills the process (entire tree) and shows what changed with diff-style indicators (`+` created, `~` modified, `-` removed)
 4. Waits for **Enter** before restarting (so you can finish your edits)
 5. On process crash — shows exit code, waits for Enter
+
+## Using with AI coding agents
+
+rewatch is designed to work seamlessly with AI coding agents like **Claude Code**, **Cursor**, **GitHub Copilot**, and others. The **trigger file** feature enables a fully automated edit-build-test loop:
+
+1. Run `rewatch` with a trigger file configured
+2. The AI agent edits your code — rewatch detects changes and kills the running process
+3. When the agent is done, it creates/touches the trigger file — rewatch restarts immediately without waiting for Enter
+4. The agent sees build output (errors or success) and iterates
+
+### Setup with Claude Code
+
+Add to your `rewatch.toml`:
+
+```toml
+command = "cargo run"
+watch = ["src"]
+ext = ["rs", "toml"]
+trigger = ".rewatch-trigger"
+```
+
+Add to your `CLAUDE.md`:
+
+```
+After making code changes that require a rebuild, run: touch .rewatch-trigger
+```
+
+Add to `.gitignore`:
+
+```
+.rewatch-trigger
+```
+
+Now run `rewatch` in one terminal and Claude Code in another — they work together automatically.
 
 ## CLI options
 
@@ -73,17 +109,11 @@ SQLX_MIGRATE_IGNORE_MISSING = "true"
 
 The trigger file enables **automated restarts without pressing Enter**. When rewatch detects that the trigger file was created or modified, it restarts the command immediately.
 
+This is the key feature for AI agent workflows — the agent edits code (rewatch kills the process), then touches the trigger file when ready (rewatch restarts without human intervention).
+
 ```toml
 trigger = ".rewatch-trigger"
 ```
-
-Use case: add an instruction to your `CLAUDE.md` so that Claude creates this file after making changes, triggering an automatic rebuild:
-
-```
-touch .rewatch-trigger
-```
-
-Add the trigger file to `.gitignore`.
 
 ## Platform support
 

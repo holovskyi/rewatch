@@ -4,7 +4,26 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "rewatch", about = "Watch files and restart commands on changes")]
+#[command(
+    name = "rewatch",
+    about = "Watch files and restart commands on changes",
+    after_help = "\
+Examples:
+  rewatch -w src,Cargo.toml -e rs,toml -- cargo run
+  rewatch -w src -w tests -e rs -- cargo test
+  rewatch -t .rewatch-trigger -w src -e rs -- cargo run
+
+Config file (rewatch.toml):
+  command = \"cargo run\"
+  watch = [\"src\", \"Cargo.toml\"]
+  ext = [\"rs\", \"toml\"]
+  trigger = \".rewatch-trigger\"
+
+  [env]
+  RUST_LOG = \"debug\"
+
+Run without arguments to use rewatch.toml from the current directory."
+)]
 pub struct CliArgs {
     /// Paths to watch (comma-separated or multiple -w flags)
     #[arg(short, long, value_delimiter = ',')]

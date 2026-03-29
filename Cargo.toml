@@ -3,6 +3,11 @@ name = "rewatch"
 version = "0.1.0"
 edition = "2024"
 
+[profile.release]
+strip = true
+lto = true
+opt-level = "z"
+
 [dependencies]
 notify = "7"
 process-wrap = { version = "9", features = ["std"] }

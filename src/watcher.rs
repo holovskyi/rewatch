@@ -1,11 +1,28 @@
 use notify::{Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, OnceLock};
 use std::time::Duration;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChangeKind {
+    Created,
+    Modified,
+    Removed,
+}
+
+impl std::fmt::Display for ChangeKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ChangeKind::Created => write!(f, "+"),
+            ChangeKind::Modified => write!(f, "~"),
+            ChangeKind::Removed => write!(f, "-"),
+        }
+    }
+}
+
 pub enum WatchEvent {
-    FileChanged(PathBuf),
+    FileChanged(PathBuf, ChangeKind),
     Trigger,
 }
 
@@ -42,19 +59,19 @@ impl FileWatcher {
                     }
                 };
 
-                match event.kind {
-                    EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_) => {}
+                let kind = match event.kind {
+                    EventKind::Create(_) => ChangeKind::Created,
+                    EventKind::Modify(_) => ChangeKind::Modified,
+                    EventKind::Remove(_) => ChangeKind::Removed,
                     _ => return,
-                }
+                };
 
                 for path in &event.paths {
-                    // Check if this is the trigger file
                     if is_trigger(path, &trigger_canonical, &trigger_raw) {
                         let _ = tx.send(WatchEvent::Trigger);
                         return;
                     }
 
-                    // Filter by extension if configured
                     if !ext_filter.is_empty() {
                         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                             if !ext_filter.contains(ext) {
@@ -65,7 +82,7 @@ impl FileWatcher {
                         }
                     }
 
-                    let _ = tx.send(WatchEvent::FileChanged(path.clone()));
+                    let _ = tx.send(WatchEvent::FileChanged(path.clone(), kind));
                 }
             },
             notify::Config::default(),
@@ -108,15 +125,15 @@ impl FileWatcher {
         self.rx.try_recv().ok()
     }
 
-    /// Drain all pending events, return unique changed paths and whether trigger was hit
-    pub fn drain_pending(&self) -> (Vec<PathBuf>, bool) {
-        let mut files = HashSet::new();
+    /// Drain all pending events, return changed files with kind and whether trigger was hit
+    pub fn drain_pending(&self) -> (Vec<(PathBuf, ChangeKind)>, bool) {
+        let mut files = HashMap::new();
         let mut triggered = false;
 
         while let Ok(event) = self.rx.try_recv() {
             match event {
-                WatchEvent::FileChanged(p) => {
-                    files.insert(p);
+                WatchEvent::FileChanged(p, kind) => {
+                    files.insert(p, kind);
                 }
                 WatchEvent::Trigger => {
                     triggered = true;
@@ -128,7 +145,7 @@ impl FileWatcher {
     }
 
     /// Wait a short time to let multiple rapid events settle, then drain
-    pub fn debounce_drain(&self, duration: Duration) -> (Vec<PathBuf>, bool) {
+    pub fn debounce_drain(&self, duration: Duration) -> (Vec<(PathBuf, ChangeKind)>, bool) {
         std::thread::sleep(duration);
         self.drain_pending()
     }

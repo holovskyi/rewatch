@@ -4,9 +4,10 @@ mod watcher;
 
 use config::Config;
 use process::ManagedChild;
-use watcher::{FileWatcher, WatchEvent};
+use watcher::{ChangeKind, FileWatcher, WatchEvent};
 
 use std::io::{self, BufRead};
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::time::Duration;
@@ -16,11 +17,19 @@ static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 const TRIGGER_MSG: &str = "=== Trigger detected, auto-restarting... ===";
 
 enum LoopEvent {
-    FileChanged(std::path::PathBuf),
+    FileChanged(PathBuf, ChangeKind),
     Trigger,
     ProcessExited(std::process::ExitStatus),
     ProcessError(io::Error),
     CtrlC,
+}
+
+/// Convert absolute path to relative (from cwd). Falls back to original if stripping fails.
+fn relative(path: &Path) -> &Path {
+    std::env::current_dir()
+        .ok()
+        .and_then(|cwd| path.strip_prefix(&cwd).ok())
+        .unwrap_or(path)
 }
 
 fn main() {
@@ -78,15 +87,16 @@ fn main() {
         let event = wait_for_event(&file_watcher, &mut child);
 
         match event {
-            LoopEvent::FileChanged(path) => {
+            LoopEvent::FileChanged(path, kind) => {
                 println!();
-                println!("=== File changed: {} ===", path.display());
+                println!("=== Changes detected ===");
+                println!("  {kind}: {}", relative(&path).display());
                 child.kill_and_wait();
 
                 let (more_files, triggered) =
                     file_watcher.debounce_drain(Duration::from_millis(100));
-                for f in &more_files {
-                    println!("    changed: {}", f.display());
+                for (f, k) in &more_files {
+                    println!("  {k}: {}", relative(f).display());
                 }
 
                 if triggered {
@@ -139,7 +149,7 @@ fn spawn_stdin_reader() -> mpsc::Receiver<()> {
         loop {
             line.clear();
             match reader.read_line(&mut line) {
-                Ok(0) | Err(_) => break, // EOF or error
+                Ok(0) | Err(_) => break,
                 Ok(_) => {}
             }
             if tx.send(()).is_err() {
@@ -159,7 +169,7 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild) -> LoopEvent 
 
         if let Some(event) = watcher.try_recv() {
             return match event {
-                WatchEvent::FileChanged(p) => LoopEvent::FileChanged(p),
+                WatchEvent::FileChanged(p, k) => LoopEvent::FileChanged(p, k),
                 WatchEvent::Trigger => LoopEvent::Trigger,
             };
         }
@@ -188,22 +198,21 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
             let (files, _) = watcher.drain_pending();
             if !files.is_empty() {
                 println!("(accumulated changes while waiting:)");
-                for f in &files {
-                    println!("    {}", f.display());
+                for (f, k) in &files {
+                    println!("  {k}: {}", relative(f).display());
                 }
             }
             return;
         }
 
-        // Drain all pending file events, watching for trigger
         loop {
             match watcher.try_recv() {
                 Some(WatchEvent::Trigger) => {
                     println!("{TRIGGER_MSG}");
                     return;
                 }
-                Some(WatchEvent::FileChanged(p)) => {
-                    println!("    (changed while waiting: {})", p.display());
+                Some(WatchEvent::FileChanged(p, k)) => {
+                    println!("  {k}: {}", relative(&p).display());
                 }
                 None => break,
             }

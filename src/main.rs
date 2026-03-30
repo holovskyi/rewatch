@@ -6,13 +6,14 @@ use config::Config;
 use process::ManagedChild;
 use watcher::{ChangeKind, FileWatcher, WatchEvent};
 
-use std::io::{self, BufRead};
+use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc;
+use std::sync::{mpsc, OnceLock};
 use std::time::Duration;
 
 static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
+static CWD: OnceLock<PathBuf> = OnceLock::new();
 
 const TRIGGER_MSG: &str = "=== Trigger detected, auto-restarting... ===";
 
@@ -26,13 +27,21 @@ enum LoopEvent {
 
 /// Convert absolute path to relative (from cwd). Falls back to original if stripping fails.
 fn relative(path: &Path) -> &Path {
-    std::env::current_dir()
-        .ok()
-        .and_then(|cwd| path.strip_prefix(&cwd).ok())
+    CWD.get()
+        .and_then(|cwd| path.strip_prefix(cwd).ok())
         .unwrap_or(path)
 }
 
+fn should_exit() -> bool {
+    SHOULD_EXIT.load(Ordering::SeqCst)
+}
+
 fn main() {
+    // Cache cwd once at startup
+    if let Ok(cwd) = std::env::current_dir() {
+        let _ = CWD.set(cwd);
+    }
+
     let config = match Config::load() {
         Ok(c) => c,
         Err(e) => {
@@ -68,7 +77,7 @@ fn main() {
     };
 
     loop {
-        if SHOULD_EXIT.load(Ordering::SeqCst) {
+        if should_exit() {
             break;
         }
 
@@ -140,7 +149,12 @@ fn main() {
 }
 
 /// Spawn a single stdin reader thread that lives forever.
+/// If stdin is not a terminal (piped/redirected), warns the user.
 fn spawn_stdin_reader() -> mpsc::Receiver<()> {
+    if !io::stdin().is_terminal() {
+        eprintln!("rewatch: warning: stdin is not a terminal, Enter key won't work (use trigger file or Ctrl+C)");
+    }
+
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let stdin = io::stdin();
@@ -163,7 +177,7 @@ fn spawn_stdin_reader() -> mpsc::Receiver<()> {
 /// Wait for either a file event, process exit, or Ctrl+C
 fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild) -> LoopEvent {
     loop {
-        if SHOULD_EXIT.load(Ordering::SeqCst) {
+        if should_exit() {
             return LoopEvent::CtrlC;
         }
 
@@ -190,7 +204,7 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
     println!("Press Enter to restart...");
 
     loop {
-        if SHOULD_EXIT.load(Ordering::SeqCst) {
+        if should_exit() {
             return;
         }
 

@@ -6,6 +6,7 @@ use config::Config;
 use process::ManagedChild;
 use watcher::{ChangeKind, FileWatcher, WatchEvent};
 
+use std::collections::HashSet;
 use std::io::{self, BufRead, IsTerminal};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -107,13 +108,17 @@ fn main() {
             LoopEvent::FileChanged(path, kind) => {
                 println!();
                 println!("=== Changes detected ===");
+                let mut seen = HashSet::new();
+                seen.insert(path.clone());
                 print_change(&path, kind);
                 child.kill_and_wait();
 
                 let (more_files, triggered) =
                     file_watcher.debounce_drain(DEBOUNCE_DURATION);
                 for (f, k) in &more_files {
-                    print_change(f, *k);
+                    if seen.insert(f.clone()) {
+                        print_change(f, *k);
+                    }
                 }
 
                 if triggered {
@@ -210,6 +215,7 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild) -> LoopEvent 
 fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
     println!();
     println!("Press Enter to restart...");
+    let mut seen = HashSet::new();
 
     loop {
         if should_exit() {
@@ -218,9 +224,13 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
 
         if stdin_rx.try_recv().is_ok() {
             let (files, _) = watcher.drain_pending();
-            if !files.is_empty() {
+            let deduped: Vec<_> = files
+                .into_iter()
+                .filter(|(f, _)| seen.insert(f.clone()))
+                .collect();
+            if !deduped.is_empty() {
                 println!("(accumulated changes while waiting:)");
-                for (f, k) in &files {
+                for (f, k) in &deduped {
                     print_change(f, *k);
                 }
             }
@@ -234,7 +244,9 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
                     return;
                 }
                 Some(WatchEvent::FileChanged(p, k)) => {
-                    print_change(&p, k);
+                    if seen.insert(p.clone()) {
+                        print_change(&p, k);
+                    }
                 }
                 None => break,
             }

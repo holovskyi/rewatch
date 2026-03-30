@@ -6,7 +6,7 @@ use std::path::PathBuf;
 #[derive(Parser, Debug)]
 #[command(
     name = "rewatch",
-    about = "Watch files and restart commands on changes",
+    about = "File watch and restart tool — a smarter cargo-watch alternative for AI coding agents",
     after_help = "\
 Examples:
   rewatch -w src,Cargo.toml -e rs,toml -- cargo run

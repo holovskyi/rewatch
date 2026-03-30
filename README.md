@@ -1,8 +1,18 @@
 # rewatch
 
-Cross-platform file watcher that restarts commands on changes. Designed for development workflows with AI coding agents (Claude Code, Cursor, Copilot, etc.) and manual editing alike.
+A smarter **cargo-watch** alternative, designed for AI coding agents.
 
-Event-driven (no polling), kills entire process tree, waits for your confirmation before restarting. Supports a trigger file for fully automated restart loops with AI agents.
+## The problem with cargo-watch
+
+Tools like `cargo-watch` rebuild on **every file save**. When an AI agent (Claude Code, Cursor, Copilot) edits multiple files in rapid succession, this triggers dozens of redundant builds — wasting CPU and producing noise.
+
+**rewatch** takes a different approach:
+
+1. Detects file changes and **kills the running process**
+2. **Waits for Enter** (or a trigger file) before restarting — so the agent can finish all its edits first
+3. Restarts **once**, when you're actually ready
+
+This means one clean build instead of twenty failed ones.
 
 ## Install
 
@@ -10,15 +20,17 @@ Event-driven (no polling), kills entire process tree, waits for your confirmatio
 cargo install rewatch
 ```
 
-## Usage
-
-### With CLI arguments
+## Quick start
 
 ```bash
+# CLI arguments
 rewatch -w src,Cargo.toml -e rs,toml -- cargo run
+
+# Or with a config file (just run `rewatch` with no arguments)
+rewatch
 ```
 
-### With config file
+### Config file
 
 Create `rewatch.toml` in your project root:
 
@@ -31,34 +43,20 @@ ext = ["rs", "toml"]
 RUST_LOG = "debug"
 ```
 
-Then just run:
-
-```bash
-rewatch
-```
-
 CLI arguments override config file values.
-
-## How it works
-
-1. Starts your command
-2. Watches specified files/directories for changes
-3. On change — kills the process (entire tree) and shows what changed with diff-style indicators (`+` created, `~` modified, `-` removed)
-4. Waits for **Enter** before restarting (so you can finish your edits)
-5. On process crash — shows exit code, waits for Enter
 
 ## Using with AI coding agents
 
-rewatch is designed to work seamlessly with AI coding agents like **Claude Code**, **Cursor**, **GitHub Copilot**, and others. The **trigger file** feature enables a fully automated edit-build-test loop:
+The **trigger file** feature enables a fully automated edit-build-test loop:
 
-1. Run `rewatch` with a trigger file configured
+1. Run `rewatch` in one terminal
 2. The AI agent edits your code — rewatch detects changes and kills the running process
-3. When the agent is done, it creates/touches the trigger file — rewatch restarts immediately without waiting for Enter
-4. The agent sees build output (errors or success) and iterates
+3. When the agent is done, it touches the trigger file — rewatch restarts immediately (no Enter needed)
+4. The agent sees build output and iterates
 
 ### Setup with Claude Code
 
-Add to your `rewatch.toml`:
+`rewatch.toml`:
 
 ```toml
 command = "cargo run"
@@ -67,19 +65,29 @@ ext = ["rs", "toml"]
 trigger = ".rewatch-trigger"
 ```
 
-Add to your `CLAUDE.md`:
+`CLAUDE.md`:
 
 ```
 After making code changes that require a rebuild, run: touch .rewatch-trigger
 ```
 
-Add to `.gitignore`:
+`.gitignore`:
 
 ```
 .rewatch-trigger
 ```
 
-Now run `rewatch` in one terminal and Claude Code in another — they work together automatically.
+Run `rewatch` in one terminal and Claude Code in another — they work together automatically.
+
+## How it works
+
+1. Starts your command
+2. Watches files for changes (event-driven, not polling)
+3. On change — kills the process (entire tree) and shows diff-style indicators:
+   - `+` created, `~` modified, `-` removed
+4. Waits for **Enter** before restarting (so you or the agent can finish edits)
+5. On process crash — shows exit code, waits for Enter
+6. On trigger file — restarts immediately without Enter
 
 ## CLI options
 
@@ -87,12 +95,10 @@ Now run `rewatch` in one terminal and Claude Code in another — they work toget
 |---|---|
 | `-w, --watch <paths>` | Paths to watch, comma-separated or multiple flags |
 | `-e, --ext <extensions>` | Filter by extensions (`.rs` and `rs` both work) |
-| `-t, --trigger <path>` | Trigger file for auto-restart (see below) |
+| `-t, --trigger <path>` | Trigger file for auto-restart |
 | `-- <command...>` | Command to run |
 
-## Config file
-
-`rewatch.toml` fields:
+## Config file reference
 
 ```toml
 command = "cargo run --release"     # command to execute (shell-style quoting supported)
@@ -105,16 +111,6 @@ RUST_LOG = "debug"
 SQLX_MIGRATE_IGNORE_MISSING = "true"
 ```
 
-## Trigger file
-
-The trigger file enables **automated restarts without pressing Enter**. When rewatch detects that the trigger file was created or modified, it restarts the command immediately.
-
-This is the key feature for AI agent workflows — the agent edits code (rewatch kills the process), then touches the trigger file when ready (rewatch restarts without human intervention).
-
-```toml
-trigger = ".rewatch-trigger"
-```
-
 ## Platform support
 
 - **Windows**: kills process tree via Win32 Job Objects
@@ -122,6 +118,16 @@ trigger = ".rewatch-trigger"
 - **macOS**: same as Linux
 
 Powered by [notify](https://crates.io/crates/notify) (OS-native file system events) and [process-wrap](https://crates.io/crates/process-wrap) (from the [watchexec](https://github.com/watchexec/watchexec) project).
+
+## rewatch vs cargo-watch
+
+| | cargo-watch | rewatch |
+|---|---|---|
+| Rebuilds on every save | Yes | No — waits for Enter or trigger |
+| AI agent friendly | No — floods with builds | Yes — trigger file for automation |
+| Kills process tree | Partial | Full (Job Objects / process groups) |
+| Config file | No | `rewatch.toml` |
+| Language-agnostic | Cargo only | Any command |
 
 ## License
 

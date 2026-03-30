@@ -63,14 +63,16 @@ fn main() {
 
     let stdin_rx = spawn_stdin_reader();
 
-    println!("rewatch: watching {:?}", config.watch);
+    let watch_list: Vec<_> = config.watch.iter().map(|p| p.display().to_string()).collect();
+    println!("rewatch");
+    println!("  watch:   {}", watch_list.join(", "));
     if !config.ext.is_empty() {
-        println!("rewatch: filtering extensions: {:?}", config.ext);
+        println!("  ext:     {}", config.ext.join(", "));
     }
     if let Some(ref t) = config.trigger {
-        println!("rewatch: trigger file: {}", t.display());
+        println!("  trigger: {}", t.display());
     }
-    println!("rewatch: command: {:?}", config.command);
+    println!("  cmd:     {}", config.command.join(" "));
     println!();
 
     let file_watcher = match FileWatcher::new(&config.watch, &config.ext, config.trigger.as_deref())

@@ -37,6 +37,10 @@ pub struct CliArgs {
     #[arg(short, long)]
     pub trigger: Option<String>,
 
+    /// Environment variables (KEY=VALUE, can be repeated)
+    #[arg(short = 'E', long = "env", value_name = "KEY=VALUE")]
+    pub env: Vec<String>,
+
     /// Command to run (everything after --)
     #[arg(last = true)]
     pub command: Vec<String>,
@@ -108,10 +112,17 @@ impl Config {
             .or_else(|| file_config.as_ref().and_then(|fc| fc.trigger.clone()))
             .map(PathBuf::from);
 
-        // Env: only from TOML
-        let env = file_config
+        // Env: TOML as base, CLI overrides
+        let mut env = file_config
             .and_then(|fc| fc.env)
             .unwrap_or_default();
+        for item in &cli.env {
+            if let Some((key, value)) = item.split_once('=') {
+                env.insert(key.to_string(), value.to_string());
+            } else {
+                return Err(format!("Invalid env format: '{item}'. Expected KEY=VALUE"));
+            }
+        }
 
         Ok(Config { command, watch, ext, trigger, env })
     }

@@ -16,6 +16,8 @@ static SHOULD_EXIT: AtomicBool = AtomicBool::new(false);
 static CWD: OnceLock<PathBuf> = OnceLock::new();
 
 const TRIGGER_MSG: &str = "=== Trigger detected, auto-restarting... ===";
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+const DEBOUNCE_DURATION: Duration = Duration::from_millis(100);
 
 enum LoopEvent {
     FileChanged(PathBuf, ChangeKind),
@@ -30,6 +32,10 @@ fn relative(path: &Path) -> &Path {
     CWD.get()
         .and_then(|cwd| path.strip_prefix(cwd).ok())
         .unwrap_or(path)
+}
+
+fn print_change(path: &Path, kind: ChangeKind) {
+    println!("  {kind}: {}", relative(path).display());
 }
 
 fn should_exit() -> bool {
@@ -99,13 +105,13 @@ fn main() {
             LoopEvent::FileChanged(path, kind) => {
                 println!();
                 println!("=== Changes detected ===");
-                println!("  {kind}: {}", relative(&path).display());
+                print_change(&path, kind);
                 child.kill_and_wait();
 
                 let (more_files, triggered) =
-                    file_watcher.debounce_drain(Duration::from_millis(100));
+                    file_watcher.debounce_drain(DEBOUNCE_DURATION);
                 for (f, k) in &more_files {
-                    println!("  {k}: {}", relative(f).display());
+                    print_change(f, *k);
                 }
 
                 if triggered {
@@ -120,7 +126,7 @@ fn main() {
                 println!();
                 println!("{TRIGGER_MSG}");
                 child.kill_and_wait();
-                let _ = file_watcher.debounce_drain(Duration::from_millis(100));
+                let _ = file_watcher.debounce_drain(DEBOUNCE_DURATION);
                 println!();
                 continue;
             }
@@ -194,7 +200,7 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild) -> LoopEvent 
             Ok(None) => {}
         }
 
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(POLL_INTERVAL);
     }
 }
 
@@ -213,7 +219,7 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
             if !files.is_empty() {
                 println!("(accumulated changes while waiting:)");
                 for (f, k) in &files {
-                    println!("  {k}: {}", relative(f).display());
+                    print_change(f, *k);
                 }
             }
             return;
@@ -226,12 +232,12 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
                     return;
                 }
                 Some(WatchEvent::FileChanged(p, k)) => {
-                    println!("  {k}: {}", relative(&p).display());
+                    print_change(&p, k);
                 }
                 None => break,
             }
         }
 
-        std::thread::sleep(Duration::from_millis(50));
+        std::thread::sleep(POLL_INTERVAL);
     }
 }

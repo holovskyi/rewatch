@@ -39,6 +39,15 @@ fn print_change(path: &Path, kind: ChangeKind) {
     println!("  {kind}: {}", relative(path).display());
 }
 
+/// Print only files not yet seen; update kind to latest for already-seen files.
+fn print_changes_deduped(seen: &mut HashSet<PathBuf>, files: &[(PathBuf, ChangeKind)]) {
+    for (f, k) in files {
+        if seen.insert(f.clone()) {
+            print_change(f, *k);
+        }
+    }
+}
+
 fn should_exit() -> bool {
     SHOULD_EXIT.load(Ordering::SeqCst)
 }
@@ -115,11 +124,7 @@ fn main() {
 
                 let (more_files, triggered) =
                     file_watcher.debounce_drain(DEBOUNCE_DURATION);
-                for (f, k) in &more_files {
-                    if seen.insert(f.clone()) {
-                        print_change(f, *k);
-                    }
-                }
+                print_changes_deduped(&mut seen, &more_files);
 
                 if triggered {
                     println!("{TRIGGER_MSG}");
@@ -224,15 +229,13 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) {
 
         if stdin_rx.try_recv().is_ok() {
             let (files, _) = watcher.drain_pending();
-            let deduped: Vec<_> = files
+            let new_files: Vec<_> = files
                 .into_iter()
-                .filter(|(f, _)| seen.insert(f.clone()))
+                .filter(|(f, _)| !seen.contains(f))
                 .collect();
-            if !deduped.is_empty() {
+            if !new_files.is_empty() {
                 println!("(accumulated changes while waiting:)");
-                for (f, k) in &deduped {
-                    print_change(f, *k);
-                }
+                print_changes_deduped(&mut seen, &new_files);
             }
             return;
         }

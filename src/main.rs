@@ -164,8 +164,8 @@ fn main() {
             LoopEvent::CtrlC => {
                 println!();
                 println!("=== Interrupted ===");
-                child.kill_and_wait();
                 SHOULD_EXIT.store(false, Ordering::SeqCst);
+                child.kill_and_wait();
                 prompt_and_wait(&file_watcher, &stdin_rx);
             }
         }

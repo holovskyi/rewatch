@@ -90,7 +90,7 @@ fn main() {
         let _ = std::fs::remove_file(t);
     }
 
-    let file_watcher = match FileWatcher::new(&config.watch, &config.ext, config.trigger.as_deref())
+    let file_watcher = match FileWatcher::new(&config.watch, &config.ext, config.trigger.as_deref(), CWD.get().map(|p| p.as_path()))
     {
         Ok(w) => w,
         Err(e) => {

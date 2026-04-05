@@ -36,6 +36,7 @@ impl FileWatcher {
         watch_paths: &[PathBuf],
         extensions: &[String],
         trigger: Option<&Path>,
+        cwd: Option<&Path>,
     ) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
 
@@ -47,10 +48,9 @@ impl FileWatcher {
                 let _ = trigger_canonical.set(c);
             }
         }
-        let trigger_raw = trigger.map(|t| {
-            std::env::current_dir()
-                .map(|cwd| cwd.join(t))
-                .unwrap_or_else(|_| t.to_path_buf())
+        let trigger_raw = trigger.map(|t| match cwd {
+            Some(cwd) => cwd.join(t),
+            None => t.to_path_buf(),
         });
 
         let mut watcher = RecommendedWatcher::new(
@@ -181,4 +181,49 @@ fn is_trigger(
 
     // Fallback: compare raw paths (canonicalize failed for both)
     event_path == trigger_raw.as_path()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_trigger_configured() {
+        let canonical = OnceLock::new();
+        assert!(!is_trigger(Path::new("/any/path"), &canonical, &None));
+    }
+
+    #[test]
+    fn fallback_matches_absolute_paths() {
+        let canonical = OnceLock::new();
+        let trigger_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
+        assert!(is_trigger(
+            Path::new("/project/.rewatch-trigger"),
+            &canonical,
+            &trigger_raw
+        ));
+    }
+
+    #[test]
+    fn fallback_rejects_relative_vs_absolute() {
+        let canonical = OnceLock::new();
+        // Relative trigger_raw should NOT match absolute event path
+        let trigger_raw = Some(PathBuf::from(".rewatch-trigger"));
+        assert!(!is_trigger(
+            Path::new("/project/.rewatch-trigger"),
+            &canonical,
+            &trigger_raw
+        ));
+    }
+
+    #[test]
+    fn fallback_rejects_different_paths() {
+        let canonical = OnceLock::new();
+        let trigger_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
+        assert!(!is_trigger(
+            Path::new("/project/src/main.rs"),
+            &canonical,
+            &trigger_raw
+        ));
+    }
 }

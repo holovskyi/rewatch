@@ -85,9 +85,10 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 2. Watches files for changes (event-driven, not polling)
 3. On change — kills the process (entire tree) and shows diff-style indicators:
    - `+` created, `~` modified, `-` removed
+   - Duplicate file names are suppressed — each file shown only once
 4. Waits for **Enter** before restarting (so you or the agent can finish edits)
 5. On process crash — shows exit code, waits for Enter
-6. On trigger file — restarts immediately without Enter
+6. On trigger file — restarts immediately without Enter (stale trigger files are cleaned up on startup)
 
 ## CLI options
 
@@ -96,7 +97,14 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 | `-w, --watch <paths>` | Paths to watch, comma-separated or multiple flags |
 | `-e, --ext <extensions>` | Filter by extensions (`.rs` and `rs` both work) |
 | `-t, --trigger <path>` | Trigger file for auto-restart |
+| `-E, --env <KEY=VALUE>` | Set environment variables (overrides TOML `[env]`) |
 | `-- <command...>` | Command to run |
+
+Example with env override:
+
+```bash
+rewatch -E SQLX_MIGRATE_IGNORE_MISSING=true
+```
 
 ## Config file reference
 

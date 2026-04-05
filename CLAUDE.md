@@ -6,8 +6,9 @@ Cross-platform file watcher with process restart for AI coding agents.
 
 When publishing a new version:
 
-1. Update version in `Cargo.toml`
-2. Add a new section to `CHANGELOG.md` with the changes
-3. Commit, push
-4. `cargo publish`
-5. Tag the release commit: `git tag v<version>` and `git push --tags`
+1. Review and update `README.md` to reflect the current state
+2. Update version in `Cargo.toml`
+3. Add a new section to `CHANGELOG.md` with the changes
+4. Commit, push
+5. `cargo publish`
+6. Tag the release commit: `git tag v<version>` and `git push --tags`

@@ -47,7 +47,11 @@ impl FileWatcher {
                 let _ = trigger_canonical.set(c);
             }
         }
-        let trigger_raw = trigger.map(|t| t.to_path_buf());
+        let trigger_raw = trigger.map(|t| {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(t))
+                .unwrap_or_else(|_| t.to_path_buf())
+        });
 
         let mut watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {

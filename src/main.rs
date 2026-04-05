@@ -85,6 +85,11 @@ fn main() {
     println!("  cmd:     {}", config.command.join(" "));
     println!();
 
+    // Remove stale trigger file so it doesn't fire unexpectedly
+    if let Some(ref t) = config.trigger {
+        let _ = std::fs::remove_file(t);
+    }
+
     let file_watcher = match FileWatcher::new(&config.watch, &config.ext, config.trigger.as_deref())
     {
         Ok(w) => w,

@@ -162,8 +162,11 @@ fn main() {
                 prompt_and_wait(&file_watcher, &stdin_rx);
             }
             LoopEvent::CtrlC => {
+                println!();
+                println!("=== Interrupted ===");
                 child.kill_and_wait();
-                break;
+                SHOULD_EXIT.store(false, Ordering::SeqCst);
+                prompt_and_wait(&file_watcher, &stdin_rx);
             }
         }
     }

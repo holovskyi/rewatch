@@ -214,7 +214,9 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild, trigger_alway
                     if trigger_always {
                         return LoopEvent::Trigger;
                     }
-                    // Ignore trigger while process is running (default)
+                    // Ignore trigger while process is running (default).
+                    // Safe: if the agent also changed files, FileChanged will fire
+                    // and debounce_drain will pick up the trigger.
                 }
             }
         }

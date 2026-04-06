@@ -8,7 +8,8 @@ When publishing a new version:
 
 1. Review and update `README.md` to reflect the current state
 2. Update version in `Cargo.toml`
-3. Add a new section to `CHANGELOG.md` with the changes
-4. Commit, push
-5. `cargo publish`
-6. Tag the release commit: `git tag v<version>` and `git push --tags`
+3. Review commits since last release: `git log v<last-version>..HEAD --oneline`
+4. Add a new section to `CHANGELOG.md` based on the actual commits
+5. Commit, push
+6. `cargo publish`
+7. Tag the release commit: `git tag v<version>` and `git push --tags`

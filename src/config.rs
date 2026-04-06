@@ -37,6 +37,10 @@ pub struct CliArgs {
     #[arg(short, long)]
     pub trigger: Option<String>,
 
+    /// Trigger restarts even without file changes (default: only when waiting)
+    #[arg(short = 'T', long = "trigger-always")]
+    pub trigger_always: bool,
+
     /// Environment variables (KEY=VALUE, can be repeated)
     #[arg(short = 'E', long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
@@ -52,6 +56,7 @@ pub struct FileConfig {
     pub watch: Option<Vec<String>>,
     pub ext: Option<Vec<String>>,
     pub trigger: Option<String>,
+    pub trigger_always: Option<bool>,
     pub env: Option<HashMap<String, String>>,
 }
 
@@ -61,6 +66,7 @@ pub struct Config {
     pub watch: Vec<PathBuf>,
     pub ext: Vec<String>,
     pub trigger: Option<PathBuf>,
+    pub trigger_always: bool,
     pub env: HashMap<String, String>,
 }
 
@@ -112,6 +118,10 @@ impl Config {
             .or_else(|| file_config.as_ref().and_then(|fc| fc.trigger.clone()))
             .map(PathBuf::from);
 
+        // Trigger always: CLI flag wins, then TOML, default false
+        let trigger_always = cli.trigger_always
+            || file_config.as_ref().and_then(|fc| fc.trigger_always).unwrap_or(false);
+
         // Env: TOML as base, CLI overrides
         let mut env = file_config
             .and_then(|fc| fc.env)
@@ -124,7 +134,7 @@ impl Config {
             }
         }
 
-        Ok(Config { command, watch, ext, trigger, env })
+        Ok(Config { command, watch, ext, trigger, trigger_always, env })
     }
 
     fn load_file_config() -> Option<FileConfig> {

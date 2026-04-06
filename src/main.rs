@@ -116,7 +116,7 @@ fn main() {
             }
         };
 
-        let event = wait_for_event(&file_watcher, &mut child);
+        let event = wait_for_event(&file_watcher, &mut child, config.trigger_always);
 
         match event {
             LoopEvent::FileChanged(path, kind) => {
@@ -201,17 +201,22 @@ fn spawn_stdin_reader() -> mpsc::Receiver<()> {
 }
 
 /// Wait for either a file event, process exit, or Ctrl+C
-fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild) -> LoopEvent {
+fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild, trigger_always: bool) -> LoopEvent {
     loop {
         if should_exit() {
             return LoopEvent::CtrlC;
         }
 
         if let Some(event) = watcher.try_recv() {
-            return match event {
-                WatchEvent::FileChanged(p, k) => LoopEvent::FileChanged(p, k),
-                WatchEvent::Trigger => LoopEvent::Trigger,
-            };
+            match event {
+                WatchEvent::FileChanged(p, k) => return LoopEvent::FileChanged(p, k),
+                WatchEvent::Trigger => {
+                    if trigger_always {
+                        return LoopEvent::Trigger;
+                    }
+                    // Ignore trigger while process is running (default)
+                }
+            }
         }
 
         match child.try_wait() {

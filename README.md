@@ -89,6 +89,9 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 4. Waits for **Enter** before restarting (so you or the agent can finish edits)
 5. On process crash — shows exit code, waits for Enter
 6. On trigger file — restarts immediately without Enter (stale trigger files are cleaned up on startup)
+7. **Ctrl+C** — first press kills the child process and waits, second press exits rewatch
+
+**Note:** By default, the trigger file only works when rewatch is waiting for Enter (after file changes or process exit). Use `trigger_always = true` or `-T` to allow trigger to restart even without file changes.
 
 ## CLI options
 
@@ -97,6 +100,7 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 | `-w, --watch <paths>` | Paths to watch, comma-separated or multiple flags |
 | `-e, --ext <extensions>` | Filter by extensions (`.rs` and `rs` both work) |
 | `-t, --trigger <path>` | Trigger file for auto-restart |
+| `-T, --trigger-always` | Trigger restarts even without file changes |
 | `-E, --env <KEY=VALUE>` | Set environment variables (overrides TOML `[env]`) |
 | `-- <command...>` | Command to run |
 
@@ -113,6 +117,7 @@ command = "cargo run --release"     # command to execute (shell-style quoting su
 watch = ["src", "Cargo.toml"]       # files/directories to watch
 ext = ["rs", "toml"]                # filter by extension (optional)
 trigger = ".rewatch-trigger"        # trigger file (optional)
+trigger_always = false              # trigger restarts even without file changes (default: false)
 
 [env]                               # environment variables for the child process
 RUST_LOG = "debug"

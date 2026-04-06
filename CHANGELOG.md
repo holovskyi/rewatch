@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.4.0] - 2026-04-06
+
+### Added
+- `-T`/`--trigger-always` CLI flag and `trigger_always` TOML option
+- First Ctrl+C kills child process and waits, second Ctrl+C exits rewatch
+
+### Changed
+- Trigger file is now ignored while the process is running (default). It only fires when rewatch is waiting for Enter. Use `trigger_always = true` or `-T` to restore old behavior.
+
 ## [0.3.0] - 2026-04-05
 
 ### Added

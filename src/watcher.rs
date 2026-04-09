@@ -42,13 +42,27 @@ impl FileWatcher {
 
         let ext_filter: HashSet<String> = extensions.iter().cloned().collect();
 
-        // Explicitly watched files (not directories) bypass the ext filter.
-        // Store canonical paths so event paths (also canonical) match reliably.
-        let explicit_files: HashSet<PathBuf> = watch_paths
-            .iter()
-            .filter(|p| p.is_file())
-            .filter_map(|p| p.canonicalize().ok())
-            .collect();
+        // Explicitly watched non-directory paths bypass the ext filter.
+        // Store both the absolute (cwd-joined) and canonical forms so we can match
+        // event paths regardless of which form `notify` delivers, and so that
+        // Remove events (where canonicalize fails) still match via the absolute form.
+        let explicit_files: HashSet<PathBuf> = {
+            let mut set = HashSet::new();
+            for p in watch_paths.iter().filter(|p| !p.is_dir()) {
+                let abs = if p.is_absolute() {
+                    p.clone()
+                } else if let Some(cwd) = cwd {
+                    cwd.join(p)
+                } else {
+                    p.clone()
+                };
+                if let Ok(c) = abs.canonicalize() {
+                    set.insert(c);
+                }
+                set.insert(abs);
+            }
+            set
+        };
 
         // Cache canonical path; OnceLock allows lazy init if file didn't exist at startup
         let trigger_canonical: OnceLock<PathBuf> = OnceLock::new();
@@ -85,19 +99,23 @@ impl FileWatcher {
                         return;
                     }
 
-                    // Explicit files bypass ext filter (compared via canonical path)
-                    let is_explicit = path
-                        .canonicalize()
-                        .ok()
-                        .map(|c| explicit_files.contains(&c))
-                        .unwrap_or(false);
+                    // Fast path: ext filter passes (or is empty) — accept immediately.
+                    // Slow path: only when ext would reject, check if this is an
+                    // explicitly watched file. canonicalize is a syscall, so we
+                    // first try a raw lookup and only canonicalize on miss.
+                    let ext_ok = ext_filter.is_empty()
+                        || path
+                            .extension()
+                            .and_then(|e| e.to_str())
+                            .is_some_and(|e| ext_filter.contains(e));
 
-                    if !is_explicit && !ext_filter.is_empty() {
-                        if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-                            if !ext_filter.contains(ext) {
-                                continue;
-                            }
-                        } else {
+                    if !ext_ok {
+                        let is_explicit = explicit_files.contains(path)
+                            || path
+                                .canonicalize()
+                                .ok()
+                                .is_some_and(|c| explicit_files.contains(&c));
+                        if !is_explicit {
                             continue;
                         }
                     }

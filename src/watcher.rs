@@ -41,6 +41,15 @@ impl FileWatcher {
         let (tx, rx) = mpsc::channel();
 
         let ext_filter: HashSet<String> = extensions.iter().cloned().collect();
+
+        // Explicitly watched files (not directories) bypass the ext filter.
+        // Store canonical paths so event paths (also canonical) match reliably.
+        let explicit_files: HashSet<PathBuf> = watch_paths
+            .iter()
+            .filter(|p| p.is_file())
+            .filter_map(|p| p.canonicalize().ok())
+            .collect();
+
         // Cache canonical path; OnceLock allows lazy init if file didn't exist at startup
         let trigger_canonical: OnceLock<PathBuf> = OnceLock::new();
         if let Some(t) = trigger {
@@ -76,7 +85,14 @@ impl FileWatcher {
                         return;
                     }
 
-                    if !ext_filter.is_empty() {
+                    // Explicit files bypass ext filter (compared via canonical path)
+                    let is_explicit = path
+                        .canonicalize()
+                        .ok()
+                        .map(|c| explicit_files.contains(&c))
+                        .unwrap_or(false);
+
+                    if !is_explicit && !ext_filter.is_empty() {
                         if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
                             if !ext_filter.contains(ext) {
                                 continue;

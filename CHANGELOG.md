@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.4.1] - 2026-04-09
+
+### Fixed
+- Files explicitly listed in `watch` (e.g. `.env`) now trigger restarts regardless of the `ext` filter. Previously, files without a matching extension were silently ignored.
+- `Remove` events for explicit files no longer get filtered out by the ext check.
+
+### Changed
+- Cheaper hot path: `canonicalize()` is now called only when the ext filter would otherwise reject an event, not on every event.
+- Internal refactor: extracted `resolve_abs` and `collect_explicit_files` helpers with unit tests.
+
 ## [0.4.0] - 2026-04-06
 
 ### Added

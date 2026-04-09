@@ -98,7 +98,7 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 | Option | Description |
 |---|---|
 | `-w, --watch <paths>` | Paths to watch, comma-separated or multiple flags |
-| `-e, --ext <extensions>` | Filter by extensions (`.rs` and `rs` both work) |
+| `-e, --ext <extensions>` | Filter by extensions (`.rs` and `rs` both work). Only applies to files inside watched directories — files listed explicitly in `-w` always trigger. |
 | `-t, --trigger <path>` | Trigger file for auto-restart |
 | `-T, --trigger-always` | Trigger restarts even without file changes |
 | `-E, --env <KEY=VALUE>` | Set environment variables (overrides TOML `[env]`) |
@@ -114,8 +114,8 @@ rewatch -E SQLX_MIGRATE_IGNORE_MISSING=true
 
 ```toml
 command = "cargo run --release"     # command to execute (shell-style quoting supported)
-watch = ["src", "Cargo.toml"]       # files/directories to watch
-ext = ["rs", "toml"]                # filter by extension (optional)
+watch = ["src", "Cargo.toml", ".env"] # files/directories to watch
+ext = ["rs", "toml"]                # filter by extension (optional, applies to dirs only)
 trigger = ".rewatch-trigger"        # trigger file (optional)
 trigger_always = false              # trigger restarts even without file changes (default: false)
 

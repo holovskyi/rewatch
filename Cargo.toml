@@ -1,6 +1,6 @@
 [package]
 name = "rewatch"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2024"
 description = "File watch and restart tool — a smarter cargo-watch alternative for AI coding agents. Waits for you (or a trigger file) instead of rebuilding on every save."
 license = "MIT"

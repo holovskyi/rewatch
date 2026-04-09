@@ -42,27 +42,7 @@ impl FileWatcher {
 
         let ext_filter: HashSet<String> = extensions.iter().cloned().collect();
 
-        // Explicitly watched non-directory paths bypass the ext filter.
-        // Store both the absolute (cwd-joined) and canonical forms so we can match
-        // event paths regardless of which form `notify` delivers, and so that
-        // Remove events (where canonicalize fails) still match via the absolute form.
-        let explicit_files: HashSet<PathBuf> = {
-            let mut set = HashSet::new();
-            for p in watch_paths.iter().filter(|p| !p.is_dir()) {
-                let abs = if p.is_absolute() {
-                    p.clone()
-                } else if let Some(cwd) = cwd {
-                    cwd.join(p)
-                } else {
-                    p.clone()
-                };
-                if let Ok(c) = abs.canonicalize() {
-                    set.insert(c);
-                }
-                set.insert(abs);
-            }
-            set
-        };
+        let explicit_files = collect_explicit_files(watch_paths, cwd);
 
         // Cache canonical path; OnceLock allows lazy init if file didn't exist at startup
         let trigger_canonical: OnceLock<PathBuf> = OnceLock::new();
@@ -71,10 +51,7 @@ impl FileWatcher {
                 let _ = trigger_canonical.set(c);
             }
         }
-        let trigger_raw = trigger.map(|t| match cwd {
-            Some(cwd) => cwd.join(t),
-            None => t.to_path_buf(),
-        });
+        let trigger_raw = trigger.map(|t| resolve_abs(t, cwd));
 
         let mut watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {
@@ -189,6 +166,35 @@ impl FileWatcher {
     }
 }
 
+/// Resolve a path to absolute form: use as-is if already absolute, else join with cwd.
+/// Falls back to the original path when no cwd is available.
+fn resolve_abs(path: &Path, cwd: Option<&Path>) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else if let Some(cwd) = cwd {
+        cwd.join(path)
+    } else {
+        path.to_path_buf()
+    }
+}
+
+/// Collect explicit (non-directory) watch paths in both absolute and canonical forms.
+///
+/// Both forms are stored so that:
+/// - event paths match regardless of which form `notify` delivers (raw vs canonical),
+/// - Remove events still match via the absolute form when canonicalize fails.
+fn collect_explicit_files(watch_paths: &[PathBuf], cwd: Option<&Path>) -> HashSet<PathBuf> {
+    let mut set = HashSet::new();
+    for p in watch_paths.iter().filter(|p| !p.is_dir()) {
+        let abs = resolve_abs(p, cwd);
+        if let Ok(c) = abs.canonicalize() {
+            set.insert(c);
+        }
+        set.insert(abs);
+    }
+    set
+}
+
 /// Compare event path against trigger path using canonical paths.
 /// Uses OnceLock to cache the first successful canonicalization (trigger may not exist at startup).
 fn is_trigger(
@@ -259,5 +265,49 @@ mod tests {
             &canonical,
             &trigger_raw
         ));
+    }
+
+    #[test]
+    fn resolve_abs_keeps_absolute_unchanged() {
+        let abs = if cfg!(windows) {
+            PathBuf::from("C:\\abs\\path")
+        } else {
+            PathBuf::from("/abs/path")
+        };
+        assert_eq!(resolve_abs(&abs, Some(Path::new("/cwd"))), abs);
+    }
+
+    #[test]
+    fn resolve_abs_joins_relative_with_cwd() {
+        let cwd = Path::new("/cwd");
+        assert_eq!(resolve_abs(Path::new("file"), Some(cwd)), cwd.join("file"));
+    }
+
+    #[test]
+    fn resolve_abs_returns_relative_unchanged_without_cwd() {
+        assert_eq!(resolve_abs(Path::new("file"), None), PathBuf::from("file"));
+    }
+
+    #[test]
+    fn explicit_files_skips_directories() {
+        // "." is always a directory
+        let set = collect_explicit_files(&[PathBuf::from(".")], None);
+        assert!(set.is_empty());
+    }
+
+    #[test]
+    fn explicit_files_includes_nonexistent_as_absolute() {
+        let cwd = Path::new("/proj");
+        let set = collect_explicit_files(&[PathBuf::from(".env")], Some(cwd));
+        // canonicalize fails for nonexistent file, but absolute form must still be present
+        assert!(set.contains(&cwd.join(".env")));
+    }
+
+    #[test]
+    fn explicit_files_includes_existing_in_canonical_form() {
+        // Cargo.toml exists in the crate root during tests
+        let set = collect_explicit_files(&[PathBuf::from("Cargo.toml")], None);
+        let canonical = Path::new("Cargo.toml").canonicalize().unwrap();
+        assert!(set.contains(&canonical));
     }
 }

@@ -1,7 +1,7 @@
 use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -45,6 +45,10 @@ pub struct CliArgs {
     #[arg(short = 'E', long = "env", value_name = "KEY=VALUE")]
     pub env: Vec<String>,
 
+    /// Path to config file (default: rewatch.toml in cwd)
+    #[arg(short = 'c', long, value_name = "PATH")]
+    pub config: Option<PathBuf>,
+
     /// Command to run (everything after --)
     #[arg(last = true)]
     pub command: Vec<String>,
@@ -68,24 +72,38 @@ pub struct Config {
     pub trigger: Option<PathBuf>,
     pub trigger_always: bool,
     pub env: HashMap<String, String>,
+    /// Path to the loaded config file. `None` when no `--config` was given
+    /// and the default `rewatch.toml` was not present (CLI-only mode).
+    pub config_path: Option<PathBuf>,
 }
 
 impl Config {
     pub fn load() -> Result<Self, String> {
         let cli = CliArgs::parse();
-        let file_config = Self::load_file_config();
+        let (candidate_path, required) = match cli.config.clone() {
+            Some(p) => (p, true),
+            None => (PathBuf::from("rewatch.toml"), false),
+        };
+        let file_config = load_file_config(&candidate_path, required)?;
+        // Only set config_path when we actually have a file to watch.
+        // For CLI-only mode (no --config, no rewatch.toml present) this is None.
+        let config_path = file_config.as_ref().map(|_| candidate_path);
+        let source_label = config_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "rewatch.toml".to_string());
 
         // Command: CLI has priority, then TOML
         let command = if !cli.command.is_empty() {
             cli.command
         } else if let Some(ref fc) = file_config {
             if let Some(ref cmd) = fc.command {
-                shlex::split(cmd).ok_or_else(|| format!("Invalid command in rewatch.toml: unclosed quote in '{cmd}'"))?
+                shlex::split(cmd).ok_or_else(|| format!("Invalid command in {source_label}: unclosed quote in '{cmd}'"))?
             } else {
-                return Err("No command specified. Use -- <command> or set 'command' in rewatch.toml".into());
+                return Err(format!("No command specified. Use -- <command> or set 'command' in {source_label}"));
             }
         } else {
-            return Err("No command specified. Use -- <command> or set 'command' in rewatch.toml".into());
+            return Err(format!("No command specified. Use -- <command> or set 'command' in {source_label}"));
         };
 
         // Watch paths: CLI has priority
@@ -98,7 +116,7 @@ impl Config {
         };
 
         if watch.is_empty() {
-            return Err("No watch paths specified. Use -w <paths> or set 'watch' in rewatch.toml".into());
+            return Err(format!("No watch paths specified. Use -w <paths> or set 'watch' in {source_label}"));
         }
 
         // Extensions: CLI has priority. Normalize: strip leading dot (.rs → rs)
@@ -134,22 +152,25 @@ impl Config {
             }
         }
 
-        Ok(Config { command, watch, ext, trigger, trigger_always, env })
+        Ok(Config { command, watch, ext, trigger, trigger_always, env, config_path })
     }
+}
 
-    fn load_file_config() -> Option<FileConfig> {
-        let path = PathBuf::from("rewatch.toml");
-        if !path.exists() {
-            return None;
+/// Load a TOML config file.
+/// - File absent + `required` → error (user explicitly asked for it via `--config`).
+/// - File absent + not required → `Ok(None)` (default `rewatch.toml`, CLI-only mode).
+/// - File present but unreadable/unparseable → always error (file exists, user has a bug to fix).
+fn load_file_config(path: &Path, required: bool) -> Result<Option<FileConfig>, String> {
+    if !path.exists() {
+        if required {
+            return Err(format!("Config file not found: {}", path.display()));
         }
-        let content = std::fs::read_to_string(&path).ok()?;
-        match toml::from_str::<FileConfig>(&content) {
-            Ok(fc) => Some(fc),
-            Err(e) => {
-                eprintln!("Warning: failed to parse rewatch.toml: {e}");
-                None
-            }
-        }
+        return Ok(None);
     }
+    let content = std::fs::read_to_string(path)
+        .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    toml::from_str::<FileConfig>(&content)
+        .map(Some)
+        .map_err(|e| format!("Failed to parse {}: {e}", path.display()))
 }
 

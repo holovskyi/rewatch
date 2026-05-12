@@ -24,6 +24,13 @@ impl std::fmt::Display for ChangeKind {
 pub enum WatchEvent {
     FileChanged(PathBuf, ChangeKind),
     Trigger,
+    ConfigChanged,
+}
+
+pub struct DrainResult {
+    pub files: Vec<(PathBuf, ChangeKind)>,
+    pub triggered: bool,
+    pub config_changed: bool,
 }
 
 pub struct FileWatcher {
@@ -36,6 +43,7 @@ impl FileWatcher {
         watch_paths: &[PathBuf],
         extensions: &[String],
         trigger: Option<&Path>,
+        config_path: Option<&Path>,
         cwd: Option<&Path>,
     ) -> Result<Self, String> {
         let (tx, rx) = mpsc::channel();
@@ -52,6 +60,14 @@ impl FileWatcher {
             }
         }
         let trigger_raw = trigger.map(|t| resolve_abs(t, cwd));
+
+        let config_canonical: OnceLock<PathBuf> = OnceLock::new();
+        if let Some(c) = config_path {
+            if let Ok(canonical) = c.canonicalize() {
+                let _ = config_canonical.set(canonical);
+            }
+        }
+        let config_raw = config_path.map(|c| resolve_abs(c, cwd));
 
         let mut watcher = RecommendedWatcher::new(
             move |result: Result<Event, notify::Error>| {
@@ -71,7 +87,12 @@ impl FileWatcher {
                 };
 
                 for path in &event.paths {
-                    if is_trigger(path, &trigger_canonical, &trigger_raw) {
+                    if is_path_match(path, &config_canonical, &config_raw) {
+                        let _ = tx.send(WatchEvent::ConfigChanged);
+                        return;
+                    }
+
+                    if is_path_match(path, &trigger_canonical, &trigger_raw) {
                         let _ = tx.send(WatchEvent::Trigger);
                         return;
                     }
@@ -117,16 +138,12 @@ impl FileWatcher {
 
         // Watch trigger file's parent directory
         if let Some(trigger_path) = trigger {
-            if let Some(parent) = trigger_path.parent() {
-                let parent = if parent.as_os_str().is_empty() {
-                    Path::new(".")
-                } else {
-                    parent
-                };
-                if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
-                    eprintln!("rewatch: warning: could not watch trigger directory {}: {e}", parent.display());
-                }
-            }
+            watch_parent_dir(&mut watcher, trigger_path, "trigger");
+        }
+
+        // Watch config file's parent directory so we detect atomic-replace saves
+        if let Some(cp) = config_path {
+            watch_parent_dir(&mut watcher, cp, "config");
         }
 
         Ok(FileWatcher {
@@ -140,10 +157,11 @@ impl FileWatcher {
         self.rx.try_recv().ok()
     }
 
-    /// Drain all pending events, return changed files with kind and whether trigger was hit
-    pub fn drain_pending(&self) -> (Vec<(PathBuf, ChangeKind)>, bool) {
+    /// Drain all pending events.
+    pub fn drain_pending(&self) -> DrainResult {
         let mut files = HashMap::new();
         let mut triggered = false;
+        let mut config_changed = false;
 
         while let Ok(event) = self.rx.try_recv() {
             match event {
@@ -153,16 +171,41 @@ impl FileWatcher {
                 WatchEvent::Trigger => {
                     triggered = true;
                 }
+                WatchEvent::ConfigChanged => {
+                    config_changed = true;
+                }
             }
         }
 
-        (files.into_iter().collect(), triggered)
+        DrainResult {
+            files: files.into_iter().collect(),
+            triggered,
+            config_changed,
+        }
     }
 
     /// Wait a short time to let multiple rapid events settle, then drain
-    pub fn debounce_drain(&self, duration: Duration) -> (Vec<(PathBuf, ChangeKind)>, bool) {
+    pub fn debounce_drain(&self, duration: Duration) -> DrainResult {
         std::thread::sleep(duration);
         self.drain_pending()
+    }
+}
+
+/// Register the parent directory of `target` with `watcher`. Failures are logged
+/// (e.g. when the parent is already covered by a recursive watch) but non-fatal.
+fn watch_parent_dir(watcher: &mut RecommendedWatcher, target: &Path, label: &str) {
+    if let Some(parent) = target.parent() {
+        let parent = if parent.as_os_str().is_empty() {
+            Path::new(".")
+        } else {
+            parent
+        };
+        if let Err(e) = watcher.watch(parent, RecursiveMode::NonRecursive) {
+            eprintln!(
+                "rewatch: warning: could not watch {label} directory {}: {e}",
+                parent.display()
+            );
+        }
     }
 }
 
@@ -195,24 +238,24 @@ fn collect_explicit_files(watch_paths: &[PathBuf], cwd: Option<&Path>) -> HashSe
     set
 }
 
-/// Compare event path against trigger path using canonical paths.
-/// Uses OnceLock to cache the first successful canonicalization (trigger may not exist at startup).
-fn is_trigger(
+/// Compare event path against a target path using canonical paths.
+/// Uses OnceLock to cache the first successful canonicalization (target may not exist at startup).
+fn is_path_match(
     event_path: &Path,
-    trigger_canonical: &OnceLock<PathBuf>,
-    trigger_raw: &Option<PathBuf>,
+    target_canonical: &OnceLock<PathBuf>,
+    target_raw: &Option<PathBuf>,
 ) -> bool {
-    let trigger_raw = match trigger_raw {
+    let target_raw = match target_raw {
         Some(t) => t,
         None => return false,
     };
 
     if let Ok(ec) = event_path.canonicalize() {
         // get_or_try_init: use cached value, or try to canonicalize now and cache it
-        if let Some(tc) = trigger_canonical.get().or_else(|| {
-            trigger_raw.canonicalize().ok().and_then(|c| {
-                let _ = trigger_canonical.set(c);
-                trigger_canonical.get()
+        if let Some(tc) = target_canonical.get().or_else(|| {
+            target_raw.canonicalize().ok().and_then(|c| {
+                let _ = target_canonical.set(c);
+                target_canonical.get()
             })
         }) {
             return ec == *tc;
@@ -220,7 +263,7 @@ fn is_trigger(
     }
 
     // Fallback: compare raw paths (canonicalize failed for both)
-    event_path == trigger_raw.as_path()
+    event_path == target_raw.as_path()
 }
 
 #[cfg(test)]
@@ -228,42 +271,54 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_trigger_configured() {
+    fn no_target_configured() {
         let canonical = OnceLock::new();
-        assert!(!is_trigger(Path::new("/any/path"), &canonical, &None));
+        assert!(!is_path_match(Path::new("/any/path"), &canonical, &None));
     }
 
     #[test]
     fn fallback_matches_absolute_paths() {
         let canonical = OnceLock::new();
-        let trigger_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
-        assert!(is_trigger(
+        let target_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
+        assert!(is_path_match(
             Path::new("/project/.rewatch-trigger"),
             &canonical,
-            &trigger_raw
+            &target_raw
         ));
     }
 
     #[test]
     fn fallback_rejects_relative_vs_absolute() {
         let canonical = OnceLock::new();
-        // Relative trigger_raw should NOT match absolute event path
-        let trigger_raw = Some(PathBuf::from(".rewatch-trigger"));
-        assert!(!is_trigger(
+        // Relative target_raw should NOT match absolute event path
+        let target_raw = Some(PathBuf::from(".rewatch-trigger"));
+        assert!(!is_path_match(
             Path::new("/project/.rewatch-trigger"),
             &canonical,
-            &trigger_raw
+            &target_raw
         ));
     }
 
     #[test]
     fn fallback_rejects_different_paths() {
         let canonical = OnceLock::new();
-        let trigger_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
-        assert!(!is_trigger(
+        let target_raw = Some(PathBuf::from("/project/.rewatch-trigger"));
+        assert!(!is_path_match(
             Path::new("/project/src/main.rs"),
             &canonical,
-            &trigger_raw
+            &target_raw
+        ));
+    }
+
+    #[test]
+    fn matches_config_path_same_as_trigger() {
+        // is_path_match should work for any target — sanity check it generalizes
+        let canonical = OnceLock::new();
+        let target_raw = Some(PathBuf::from("/project/rewatch.toml"));
+        assert!(is_path_match(
+            Path::new("/project/rewatch.toml"),
+            &canonical,
+            &target_raw
         ));
     }
 

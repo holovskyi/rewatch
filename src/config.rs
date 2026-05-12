@@ -1,6 +1,8 @@
 use clap::Parser;
 use serde::Deserialize;
 use std::collections::HashMap;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 #[derive(Parser, Debug)]
@@ -75,6 +77,10 @@ pub struct Config {
     /// Path to the loaded config file. `None` when no `--config` was given
     /// and the default `rewatch.toml` was not present (CLI-only mode).
     pub config_path: Option<PathBuf>,
+    /// Hash of the raw config file bytes. Used to skip reloads when an
+    /// editor touches the file without changing its content (no-op `:w`,
+    /// atomic-save transient states, `touch`).
+    pub config_hash: Option<u64>,
 }
 
 impl Config {
@@ -84,7 +90,11 @@ impl Config {
             Some(p) => (p, true),
             None => (PathBuf::from("rewatch.toml"), false),
         };
-        let file_config = load_file_config(&candidate_path, required)?;
+        let loaded = load_file_config(&candidate_path, required)?;
+        let (file_config, config_hash) = match loaded {
+            Some((fc, h)) => (Some(fc), Some(h)),
+            None => (None, None),
+        };
         // Only set config_path when we actually have a file to watch.
         // For CLI-only mode (no --config, no rewatch.toml present) this is None.
         let config_path = file_config.as_ref().map(|_| candidate_path);
@@ -152,15 +162,15 @@ impl Config {
             }
         }
 
-        Ok(Config { command, watch, ext, trigger, trigger_always, env, config_path })
+        Ok(Config { command, watch, ext, trigger, trigger_always, env, config_path, config_hash })
     }
 }
 
-/// Load a TOML config file.
+/// Load a TOML config file. Returns the parsed config plus a hash of the raw bytes.
 /// - File absent + `required` → error (user explicitly asked for it via `--config`).
 /// - File absent + not required → `Ok(None)` (default `rewatch.toml`, CLI-only mode).
 /// - File present but unreadable/unparseable → always error (file exists, user has a bug to fix).
-fn load_file_config(path: &Path, required: bool) -> Result<Option<FileConfig>, String> {
+fn load_file_config(path: &Path, required: bool) -> Result<Option<(FileConfig, u64)>, String> {
     if !path.exists() {
         if required {
             return Err(format!("Config file not found: {}", path.display()));
@@ -169,8 +179,11 @@ fn load_file_config(path: &Path, required: bool) -> Result<Option<FileConfig>, S
     }
     let content = std::fs::read_to_string(path)
         .map_err(|e| format!("Failed to read {}: {e}", path.display()))?;
+    let mut hasher = DefaultHasher::new();
+    content.hash(&mut hasher);
+    let hash = hasher.finish();
     toml::from_str::<FileConfig>(&content)
-        .map(Some)
+        .map(|fc| Some((fc, hash)))
         .map_err(|e| format!("Failed to parse {}: {e}", path.display()))
 }
 

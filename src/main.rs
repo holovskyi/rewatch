@@ -24,7 +24,10 @@ const DEBOUNCE_DURATION: Duration = Duration::from_millis(100);
 enum LoopEvent {
     FileChanged(PathBuf, ChangeKind),
     Trigger,
-    ConfigChanged,
+    /// Config file changed AND the new hash differs from the running one
+    /// (i.e. the change was real, not a no-op `touch` or atomic-save transient).
+    /// Carries the already-loaded new config so callers don't redo the work.
+    ConfigChanged(Config),
     ProcessExited(std::process::ExitStatus),
     ProcessError(io::Error),
     CtrlC,
@@ -33,10 +36,58 @@ enum LoopEvent {
 enum WaitOutcome {
     /// Enter pressed or a non-config event observed — caller resumes the supervise loop.
     Restart,
-    /// ConfigChanged observed while waiting — caller must reload.
-    Reload,
+    /// Real config change observed while waiting (hash differs). Carries the new config.
+    Reload(Config),
     /// SHOULD_EXIT was set — caller must break out.
     Exit,
+}
+
+/// Final disposition of the supervise loop after an event arm completes.
+/// Returned by `handle_wait` so callers do a uniform three-way dispatch on
+/// `continue 'supervise` / `continue 'reload` / `break 'reload`.
+enum LoopAction {
+    /// Stay in the supervise loop — respawn the child with the current config.
+    Resume,
+    /// Reload: new config is ready, restart the outer reload loop with it.
+    Reload(Config),
+    /// Shutdown requested.
+    Exit,
+}
+
+/// Attempt to reload the config in response to a watcher event. Returns
+/// `Some(new_config)` only when the file actually changed (different hash) AND
+/// loaded successfully. Returns `None` on:
+/// - no-op save / `touch` / atomic-save transient (hash unchanged) → quiet skip
+/// - file briefly absent / unparseable / unreadable → warning + skip
+/// In both cases the caller keeps running with the existing config; rewatch
+/// only exits on errors at startup, not in steady state.
+fn try_reload(prev_hash: Option<u64>) -> Option<Config> {
+    match Config::load() {
+        Ok(new) if new.config_hash == prev_hash => None,
+        Ok(new) => Some(new),
+        Err(e) => {
+            eprintln!("rewatch: config reload skipped: {e}");
+            None
+        }
+    }
+}
+
+/// Collapses prompt_and_wait's outcome into a concrete action. Prints the
+/// `CONFIG_RELOAD_MSG` only once a real reload is confirmed by prompt_and_wait
+/// (no-op saves are filtered out inside prompt_and_wait itself).
+fn handle_wait(
+    watcher: &FileWatcher,
+    stdin_rx: &mpsc::Receiver<()>,
+    prev_hash: Option<u64>,
+) -> LoopAction {
+    match prompt_and_wait(watcher, stdin_rx, prev_hash) {
+        WaitOutcome::Restart => LoopAction::Resume,
+        WaitOutcome::Exit => LoopAction::Exit,
+        WaitOutcome::Reload(new) => {
+            println!("{CONFIG_RELOAD_MSG}");
+            LoopAction::Reload(new)
+        }
+    }
 }
 
 /// Convert absolute path to relative (from cwd). Falls back to original if stripping fails.
@@ -91,6 +142,9 @@ fn main() {
     if let Some(ref t) = initial_config.trigger {
         let _ = std::fs::remove_file(t);
     }
+    // Warn once at startup if trigger and config point at the same file
+    // (config check fires first in the watcher, so trigger would never run).
+    warn_if_trigger_equals_config(&initial_config);
     let mut next_config: Option<Config> = Some(initial_config);
 
     'reload: loop {
@@ -109,8 +163,6 @@ fn main() {
                 }
             },
         };
-
-        warn_if_trigger_equals_config(&config);
 
         let watch_list: Vec<_> = config.watch.iter().map(|p| p.display().to_string()).collect();
         println!("rewatch");
@@ -141,6 +193,9 @@ fn main() {
             }
         };
 
+        // Drives flow-control after every prompt_and_wait callsite. A macro
+        // (not a function) so it can `continue 'reload` / `continue 'supervise`
+        // / `break 'reload` in the caller's loop scope.
         'supervise: loop {
             if should_exit() {
                 break 'reload;
@@ -153,22 +208,25 @@ fn main() {
                 Ok(c) => c,
                 Err(e) => {
                     eprintln!("Failed to start command: {e}");
-                    match prompt_and_wait(&file_watcher, &stdin_rx) {
-                        WaitOutcome::Reload => continue 'reload,
-                        WaitOutcome::Restart => continue 'supervise,
-                        WaitOutcome::Exit => break 'reload,
+                    match handle_wait(&file_watcher, &stdin_rx, config.config_hash) {
+                        LoopAction::Reload(new) => {
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        LoopAction::Resume => continue 'supervise,
+                        LoopAction::Exit => break 'reload,
                     }
                 }
             };
 
-            let event = wait_for_event(&file_watcher, &mut child, config.trigger_always);
+            let event = wait_for_event(&file_watcher, &mut child, config.trigger_always, config.config_hash);
 
             match event {
-                LoopEvent::ConfigChanged => {
+                LoopEvent::ConfigChanged(new) => {
                     println!();
                     println!("{CONFIG_RELOAD_MSG}");
                     child.kill_and_wait();
-                    let _ = file_watcher.debounce_drain(DEBOUNCE_DURATION);
+                    next_config = Some(new);
                     println!();
                     continue 'reload;
                 }
@@ -184,9 +242,13 @@ fn main() {
                     print_changes_deduped(&mut seen, &drain.files);
 
                     if drain.config_changed {
-                        println!("{CONFIG_RELOAD_MSG}");
-                        println!();
-                        continue 'reload;
+                        if let Some(new) = try_reload(config.config_hash) {
+                            println!("{CONFIG_RELOAD_MSG}");
+                            println!();
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        // Hash unchanged — fall through to trigger / prompt logic.
                     }
 
                     if drain.triggered {
@@ -195,10 +257,13 @@ fn main() {
                         continue 'supervise;
                     }
 
-                    match prompt_and_wait(&file_watcher, &stdin_rx) {
-                        WaitOutcome::Reload => continue 'reload,
-                        WaitOutcome::Restart => continue 'supervise,
-                        WaitOutcome::Exit => break 'reload,
+                    match handle_wait(&file_watcher, &stdin_rx, config.config_hash) {
+                        LoopAction::Reload(new) => {
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        LoopAction::Resume => continue 'supervise,
+                        LoopAction::Exit => break 'reload,
                     }
                 }
                 LoopEvent::Trigger => {
@@ -207,9 +272,12 @@ fn main() {
                     child.kill_and_wait();
                     let drain = file_watcher.debounce_drain(DEBOUNCE_DURATION);
                     if drain.config_changed {
-                        println!("{CONFIG_RELOAD_MSG}");
-                        println!();
-                        continue 'reload;
+                        if let Some(new) = try_reload(config.config_hash) {
+                            println!("{CONFIG_RELOAD_MSG}");
+                            println!();
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
                     }
                     println!();
                     continue 'supervise;
@@ -221,19 +289,25 @@ fn main() {
                     } else {
                         println!("=== Process exited with: {} ===", status);
                     }
-                    match prompt_and_wait(&file_watcher, &stdin_rx) {
-                        WaitOutcome::Reload => continue 'reload,
-                        WaitOutcome::Restart => continue 'supervise,
-                        WaitOutcome::Exit => break 'reload,
+                    match handle_wait(&file_watcher, &stdin_rx, config.config_hash) {
+                        LoopAction::Reload(new) => {
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        LoopAction::Resume => continue 'supervise,
+                        LoopAction::Exit => break 'reload,
                     }
                 }
                 LoopEvent::ProcessError(e) => {
                     println!();
                     println!("=== Process error: {} ===", e);
-                    match prompt_and_wait(&file_watcher, &stdin_rx) {
-                        WaitOutcome::Reload => continue 'reload,
-                        WaitOutcome::Restart => continue 'supervise,
-                        WaitOutcome::Exit => break 'reload,
+                    match handle_wait(&file_watcher, &stdin_rx, config.config_hash) {
+                        LoopAction::Reload(new) => {
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        LoopAction::Resume => continue 'supervise,
+                        LoopAction::Exit => break 'reload,
                     }
                 }
                 LoopEvent::CtrlC => {
@@ -241,10 +315,13 @@ fn main() {
                     println!("=== Interrupted ===");
                     SHOULD_EXIT.store(false, Ordering::SeqCst);
                     child.kill_and_wait();
-                    match prompt_and_wait(&file_watcher, &stdin_rx) {
-                        WaitOutcome::Reload => continue 'reload,
-                        WaitOutcome::Restart => continue 'supervise,
-                        WaitOutcome::Exit => break 'reload,
+                    match handle_wait(&file_watcher, &stdin_rx, config.config_hash) {
+                        LoopAction::Reload(new) => {
+                            next_config = Some(new);
+                            continue 'reload;
+                        }
+                        LoopAction::Resume => continue 'supervise,
+                        LoopAction::Exit => break 'reload,
                     }
                 }
             }
@@ -298,8 +375,17 @@ fn spawn_stdin_reader() -> mpsc::Receiver<()> {
     rx
 }
 
-/// Wait for either a file event, process exit, or Ctrl+C
-fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild, trigger_always: bool) -> LoopEvent {
+/// Wait for either a file event, process exit, or Ctrl+C.
+/// `ConfigChanged` events from the watcher are filtered here: only a *real*
+/// change (different hash than `prev_hash`) is returned as
+/// `LoopEvent::ConfigChanged`; no-op saves are silently re-waited so the
+/// running child is not killed for nothing.
+fn wait_for_event(
+    watcher: &FileWatcher,
+    child: &mut ManagedChild,
+    trigger_always: bool,
+    prev_hash: Option<u64>,
+) -> LoopEvent {
     loop {
         if should_exit() {
             return LoopEvent::CtrlC;
@@ -308,7 +394,13 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild, trigger_alway
         if let Some(event) = watcher.try_recv() {
             match event {
                 WatchEvent::FileChanged(p, k) => return LoopEvent::FileChanged(p, k),
-                WatchEvent::ConfigChanged => return LoopEvent::ConfigChanged,
+                WatchEvent::ConfigChanged => {
+                    let _ = watcher.debounce_drain(DEBOUNCE_DURATION);
+                    if let Some(new) = try_reload(prev_hash) {
+                        return LoopEvent::ConfigChanged(new);
+                    }
+                    // No-op save / transient absence: keep waiting, keep child alive.
+                }
                 WatchEvent::Trigger => {
                     if trigger_always {
                         return LoopEvent::Trigger;
@@ -331,7 +423,13 @@ fn wait_for_event(watcher: &FileWatcher, child: &mut ManagedChild, trigger_alway
 }
 
 /// Print "Press Enter to restart..." and wait for Enter, trigger, or config change.
-fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) -> WaitOutcome {
+/// Config events are hash-filtered inline: a no-op save is consumed silently
+/// without leaving the prompt.
+fn prompt_and_wait(
+    watcher: &FileWatcher,
+    stdin_rx: &mpsc::Receiver<()>,
+    prev_hash: Option<u64>,
+) -> WaitOutcome {
     println!();
     println!("Press Enter to restart...");
     let mut seen = HashSet::new();
@@ -344,8 +442,10 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) -> Wait
         if stdin_rx.try_recv().is_ok() {
             let DrainResult { files, config_changed, .. } = watcher.drain_pending();
             if config_changed {
-                println!("{CONFIG_RELOAD_MSG}");
-                return WaitOutcome::Reload;
+                if let Some(new) = try_reload(prev_hash) {
+                    return WaitOutcome::Reload(new);
+                }
+                // No-op: fall through and treat Enter as a plain restart.
             }
             let new_files: Vec<_> = files
                 .into_iter()
@@ -361,8 +461,11 @@ fn prompt_and_wait(watcher: &FileWatcher, stdin_rx: &mpsc::Receiver<()>) -> Wait
         loop {
             match watcher.try_recv() {
                 Some(WatchEvent::ConfigChanged) => {
-                    println!("{CONFIG_RELOAD_MSG}");
-                    return WaitOutcome::Reload;
+                    let _ = watcher.debounce_drain(DEBOUNCE_DURATION);
+                    if let Some(new) = try_reload(prev_hash) {
+                        return WaitOutcome::Reload(new);
+                    }
+                    // No-op: stay at the prompt without printing anything.
                 }
                 Some(WatchEvent::Trigger) => {
                     println!("{TRIGGER_MSG}");

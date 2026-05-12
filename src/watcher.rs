@@ -86,15 +86,20 @@ impl FileWatcher {
                     _ => return,
                 };
 
+                // Aggregate signals across all paths in this event so a rename pair
+                // (config + source file in one notify Event) doesn't drop the source.
+                let mut config_changed = false;
+                let mut triggered = false;
+
                 for path in &event.paths {
                     if is_path_match(path, &config_canonical, &config_raw) {
-                        let _ = tx.send(WatchEvent::ConfigChanged);
-                        return;
+                        config_changed = true;
+                        continue;
                     }
 
                     if is_path_match(path, &trigger_canonical, &trigger_raw) {
-                        let _ = tx.send(WatchEvent::Trigger);
-                        return;
+                        triggered = true;
+                        continue;
                     }
 
                     // Fast path: ext filter passes (or is empty) — accept immediately.
@@ -119,6 +124,13 @@ impl FileWatcher {
                     }
 
                     let _ = tx.send(WatchEvent::FileChanged(path.clone(), kind));
+                }
+
+                if config_changed {
+                    let _ = tx.send(WatchEvent::ConfigChanged);
+                }
+                if triggered {
+                    let _ = tx.send(WatchEvent::Trigger);
                 }
             },
             notify::Config::default(),

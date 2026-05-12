@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.4.2] - 2026-05-12
+
+### Added
+- `-c`/`--config <PATH>` CLI flag to point at a custom config file. When given explicitly, the file is required; without it, `rewatch.toml` from cwd is used if present (CLI-only mode preserved when absent).
+- Hot-reload: rewatch watches its own config file. Editing `rewatch.toml` (or the file passed via `--config`) live-reloads the config and respawns the child with the new command/env/watch paths/trigger.
+- Content-hash dedup on config reload: no-op saves (`touch rewatch.toml`, `:w` without edits, duplicate notify events on Windows ReadDirectoryChangesW) are silently ignored — the running child is not killed.
+
+### Changed
+- TOML parse errors and transient file absence during runtime reload no longer exit rewatch. A warning is logged and the previously-loaded config keeps running. Startup parse errors still exit (unchanged behavior).
+- Notify events containing multiple paths (e.g. config + source file in a single rename pair) now correctly emit `FileChanged` for non-config paths instead of being dropped after the config match.
+
+### Internal
+- Generalized `is_trigger` into a shared `is_path_match` helper (used for both trigger and config detection).
+- Replaced `drain_pending`'s `(Vec, bool)` return with a named `DrainResult` struct so adding the `config_changed` flag is type-safe at every callsite.
+- `prompt_and_wait` now returns a `WaitOutcome { Restart, Reload(Config), Exit }` enum so the compiler enforces handling at every callsite.
+- Extracted `handle_wait` helper to deduplicate the five identical `match prompt_and_wait` blocks in the main loop.
+- Trigger==config startup warning prevents a silently confusing config in which trigger events would never fire.
+
 ## [0.4.1] - 2026-04-09
 
 ### Fixed

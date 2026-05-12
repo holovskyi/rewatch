@@ -89,7 +89,8 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 4. Waits for **Enter** before restarting (so you or the agent can finish edits)
 5. On process crash — shows exit code, waits for Enter
 6. On trigger file — restarts immediately without Enter (stale trigger files are cleaned up on startup)
-7. **Ctrl+C** — first press kills the child process and waits, second press exits rewatch
+7. **Hot-reloads its own config**: editing `rewatch.toml` (or the file passed via `--config`) re-reads the config and respawns the child with the new command/env/watch paths. No-op saves (`touch`, `:w` without edits) are skipped via content-hash dedup.
+8. **Ctrl+C** — first press kills the child process and waits, second press exits rewatch
 
 **Note:** By default, the trigger file only works when rewatch is waiting for Enter (after file changes or process exit). Use `trigger_always = true` or `-T` to allow trigger to restart even without file changes.
 
@@ -102,6 +103,7 @@ Run `rewatch` in one terminal and Claude Code in another — they work together 
 | `-t, --trigger <path>` | Trigger file for auto-restart |
 | `-T, --trigger-always` | Trigger restarts even without file changes |
 | `-E, --env <KEY=VALUE>` | Set environment variables (overrides TOML `[env]`) |
+| `-c, --config <path>` | Use a custom config file instead of `rewatch.toml`. The file is required when this flag is given. |
 | `-- <command...>` | Command to run |
 
 Example with env override:
